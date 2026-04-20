@@ -2,12 +2,13 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 import tkinter.scrolledtext as st
 from PIL import Image, ImageTk
-from rembg import remove, new_session
 from pathlib import Path
 import numpy as np
 import traceback
 import os
 import json
+
+from inpaint_engine import InpaintEngine
 
 
 class ConfigManager:
@@ -74,8 +75,7 @@ class ObjectPickerApp:
         # Model lazy-loading state
         self.rembg_session = None
         self.sam_predictor = None
-        self.inpaint_model = None
-
+        self.inpaint_model = InpaintEngine()
         self._setup_menu()
         self._setup_ui()
         self.apply_theme()
@@ -145,10 +145,20 @@ class ObjectPickerApp:
         self.sam_prompt_entry = tk.Entry(self.btn_frame, textvariable=self.sam_prompt_var, width=12)
         self.sam_prompt_entry.pack(side=tk.LEFT, padx=5)
 
-        # Inpaint Toggle
+        # Inpainting module
+        inpaint_frame = tk.Frame(self.btn_frame, highlightbackground="#444", highlightthickness=1)
+        inpaint_frame.pack(side=tk.LEFT, padx=10)
+
         self.inpaint_var = tk.BooleanVar(value=self.cfg.get("inpaint_enabled", False))
-        self.inpaint_check = tk.Checkbutton(self.btn_frame, text="Inpaint", variable=self.inpaint_var)
+        self.inpaint_check = tk.Checkbutton(inpaint_frame, text="Inpainting", variable=self.inpaint_var)
         self.inpaint_check.pack(side=tk.LEFT, padx=5)
+
+        self.inpaint_method_var = tk.StringVar(value=self.cfg.get("inpaint_method", "OpenCV"))
+        self.inpaint_dropdown = ttk.Combobox(
+            inpaint_frame, textvariable=self.inpaint_method_var,
+            values=["OpenCV", "LaMa"], state="readonly", width=8
+        )
+        self.inpaint_dropdown.pack(side=tk.LEFT, padx=5)
 
         tk.Button(self.btn_frame, text="Extract Selection", command=self.process_selection, bg="#4CAF50", fg="white",
                   font=("Arial", 9, "bold")).pack(side=tk.RIGHT, padx=10)
@@ -238,87 +248,57 @@ class ObjectPickerApp:
         tk.Button(top, text="Save Settings", command=save_settings, width=15).grid(row=2, column=0, columnspan=2,
                                                                                    pady=20)
 
-    # --- MODEL LOADING WITH ERROR HANDLING ---
-
-    def load_inpaint_model(self) -> bool:
-        """Tries to load the inpainting model. Throws exceptions on failure."""
-        if self.inpaint_model is not None:
-            return True
-
-        self.status_bar.config(text="Loading Inpainting Module...")
-        self.root.update()
-
-        # DEV STUB: Simulating an import/loading error so we can test the fallback UI.
-        # Replace this raise statement with actual model initialization later.
-        raise ImportError(
-            "Could not load LaMa / OpenCV inpainting libraries.\n"
-            "This is a simulated error to test the graceful fallback dialog.\n\n"
-            "Traceback (most recent call last):\n"
-            "  File \"object_picker.py\", line 404, in load_inpaint_model\n"
-            "ModuleNotFoundError: No module named 'lama_cleaner'"
-        )
-
-        self.inpaint_model = "Loaded!"  # Dummy
-        return True
-
-    def handle_inpaint_error(self, err_msg: str) -> bool:
-        """Shows C#-style error dialog with copyable stack trace. Returns True if user wants to continue."""
+    def handle_inpaint_error(self, err_msg: str, module_name: str) -> bool:
+        """Shows a C#-style error window. Returns True if user wants to continue."""
         dialog = tk.Toplevel(self.root)
         dialog.title("Module Load Error")
-        dialog.geometry("600x450")
+        dialog.geometry("650x450")
         dialog.grab_set()
 
-        # Determine theme for dialog
         theme = self.cfg.get("theme", "System")
         bg_color = "#1e1e1e" if theme == "Dark" or (
                     theme == "System" and self.root.cget('bg') == "#1e1e1e") else "#f0f0f0"
         fg_color = "#ffffff" if bg_color == "#1e1e1e" else "#000000"
         dialog.configure(bg=bg_color)
 
-        # Header
         header_frame = tk.Frame(dialog, bg=bg_color)
         header_frame.pack(fill=tk.X, padx=10, pady=10)
-        tk.Label(header_frame, text="⚠️ Failed to load the Inpainting module.", font=("Arial", 12, "bold"),
-                 fg="#f44336", bg=bg_color).pack(anchor="w")
-        tk.Label(header_frame,
-                 text="You can abort the operation, or continue extracting the object without inpainting.", bg=bg_color,
+        tk.Label(header_frame, text=f"⚠️ An error occurred when initializing module: {module_name}.",
+                 font=("Arial", 12, "bold"), fg="#f44336", bg=bg_color).pack(anchor="w")
+        tk.Label(header_frame, text="You can abort or continue this process without inpainting", bg=bg_color,
                  fg=fg_color).pack(anchor="w")
 
-        # Textarea for stack trace
         text_area = st.ScrolledText(dialog, wrap=tk.WORD, height=12, font=("Consolas", 9),
                                     bg="#2b2b2b" if bg_color == "#1e1e1e" else "#ffffff",
                                     fg="#ff7b72" if bg_color == "#1e1e1e" else "#d73a49")
         text_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         text_area.insert(tk.END, err_msg)
-        text_area.configure(state=tk.DISABLED)  # Make it read-only but copyable
+        text_area.configure(state=tk.DISABLED)
 
-        # Checkbox
         disable_inpaint_var = tk.BooleanVar(value=False)
-        chk = tk.Checkbutton(dialog, text="Disable Inpainting for future extractions (this session)",
+        chk = tk.Checkbutton(dialog, text="Turn off inpainting for this session (for bulk processing).",
                              variable=disable_inpaint_var, bg=bg_color, fg=fg_color,
                              selectcolor="#2b2b2b" if bg_color == "#1e1e1e" else "#ffffff")
         chk.pack(anchor="w", padx=10, pady=5)
 
         self.continue_flag = False
-
-        # Buttons
         btn_frame = tk.Frame(dialog, bg=bg_color)
         btn_frame.pack(fill=tk.X, padx=10, pady=15)
 
-        def on_continue():
+        def on_continue() -> None:
             self.continue_flag = True
             if disable_inpaint_var.get():
                 self.inpaint_var.set(False)
                 self.cfg.set("inpaint_enabled", False)
             dialog.destroy()
 
-        def on_abort():
+        def on_abort() -> None:
             self.continue_flag = False
             dialog.destroy()
 
-        tk.Button(btn_frame, text="Continue without Inpainting", command=on_continue, bg="#2196F3", fg="white",
+        tk.Button(btn_frame, text="Continue without inpainting", command=on_continue, bg="#2196F3", fg="white",
                   width=25).pack(side=tk.RIGHT, padx=5)
-        tk.Button(btn_frame, text="Abort Extraction", command=on_abort, width=15).pack(side=tk.RIGHT, padx=5)
+        tk.Button(btn_frame, text="Abort", command=on_abort, width=15).pack(side=tk.RIGHT, padx=5)
 
         self.root.wait_window(dialog)
         return self.continue_flag
@@ -328,6 +308,7 @@ class ObjectPickerApp:
             self.status_bar.config(text="Loading rembg model... please wait.")
             self.root.update()
             try:
+                from rembg import new_session
                 self.rembg_session = new_session("isnet-general-use")
             except Exception as e:
                 messagebox.showerror("Model Error", f"Failed to load rembg:\n{e}")
@@ -503,17 +484,23 @@ class ObjectPickerApp:
             messagebox.showwarning("Warning", "Please draw a valid bounding box.")
             return
 
-        # 1. Attempt to load Inpainting module first (if enabled)
         if self.inpaint_var.get():
+            inpaint_method = self.inpaint_method_var.get()
             try:
-                self.load_inpaint_model()
+                self.status_bar.config(text=f"Preparing inpainting module: {inpaint_method}...")
+                self.root.update()
+                # Dummy call to trigger lazy loading & catch import errors
+                if inpaint_method == "OpenCV":
+                    import cv2
+                elif inpaint_method == "LaMa":
+                    self.inpaint_model._load_lama()
+
             except Exception as e:
-                # Capture the full traceback
                 err_trace = traceback.format_exc()
-                continue_without_inpaint = self.handle_inpaint_error(err_trace)
+                continue_without_inpaint = self.handle_inpaint_error(err_trace, inpaint_method)
 
                 if not continue_without_inpaint:
-                    self.status_bar.config(text="Extraction aborted by user.")
+                    self.status_bar.config(text="Aborted by user.")
                     return
                 print("DEV LOG: User opted to continue without inpainting.")
 
@@ -536,10 +523,17 @@ class ObjectPickerApp:
             y2 = min(img_h, self.bbox[3] + margin_px)
             working_bbox = (x1, y1, x2, y2)
 
+            mask_img = 0
+
             if engine == "rembg (isnet)":
                 if not self.load_rembg(): return
                 cropped_img = self.original_img.crop(working_bbox)
-                output_img = remove(cropped_img, session=self.rembg_session)
+                output_img =()
+                try:
+                    from rembg import remove
+                    output_img = remove(cropped_img, session=self.rembg_session)
+                except Exception as e:
+                    print("Something went wrong with rembg (isnet)")
 
             elif engine == "SAM (vit_b)":
                 if not self.load_sam(): return
@@ -561,10 +555,43 @@ class ObjectPickerApp:
                 output_img = self.original_img.copy()
                 output_img.putalpha(mask_img)
                 output_img = output_img.crop(working_bbox)
+                mask_img = mask_img.crop(working_bbox)
 
-            # --- Inpainting Step (Mock) ---
-            if self.inpaint_var.get() and self.inpaint_model is not None:
-                print("DEV LOG: Inpainting logic would execute here on the generated mask.")
+            if self.inpaint_var.get() and not isinstance(mask_img, int):
+                self.status_bar.config(text=f"Wypełnianie braków ({inpaint_method})...")
+                self.root.update()
+
+                try:
+                    import cv2
+                    # 1. Find internal "holes" in the object using Convex Hull
+                    mask_cv = np.array(mask_img)
+                    _, binary = cv2.threshold(mask_cv, 127, 255, cv2.THRESH_BINARY)
+
+                    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    filled_mask_cv = np.zeros_like(binary)
+
+                    if contours:
+                        # Grab the largest contour (the object)
+                        main_contour = max(contours, key=cv2.contourArea)
+                        # Create a convex hull to "bridge" the gap left by the thumb
+                        hull = cv2.convexHull(main_contour)
+                        cv2.drawContours(filled_mask_cv, [hull], -1, 255, thickness=cv2.FILLED)
+
+                    # The inpaint mask is the hull area MINUS the original mask (the thumbhole!)
+                    hole_mask_cv = cv2.bitwise_and(filled_mask_cv, cv2.bitwise_not(binary))
+                    inpaint_mask = Image.fromarray(hole_mask_cv)
+
+                    # The new alpha mask ensures the inpainted area stays visible
+                    new_alpha_mask = Image.fromarray(filled_mask_cv)
+
+                    inpainted_img = self.inpaint_model.process(output_img, inpaint_mask, inpaint_method)
+
+                    # Apply the NEW solid mask
+                    inpainted_img.putalpha(new_alpha_mask)
+                    output_img = inpainted_img
+                except Exception as e:
+                    print(f"DEV LOG: Inpainting logic failed during process: {e}")
+                    traceback.print_exc()
 
             self.show_approval_window(output_img)
             self.status_bar.config(text="Waiting for user approval...")
