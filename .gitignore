@@ -1,2 +1,4 @@
 raw_photos/
 masked_photos/
+sam_*.pth
+config.json

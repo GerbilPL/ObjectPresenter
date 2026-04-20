@@ -5,13 +5,53 @@ from rembg import remove, new_session
 from pathlib import Path
 import numpy as np
 import os
+import json
+
+
+class ConfigManager:
+    """Manages application configuration and saves it to config.json"""
+
+    def __init__(self, config_path: str = "config.json"):
+        self.config_path = Path(config_path)
+        self.default_config = {
+            "theme": "System",
+            "filename_template": "filename$_extracted",
+            "default_margin": 40,
+            "inpaint_enabled": False
+        }
+        self.config = self.load_config()
+
+    def load_config(self) -> dict:
+        if self.config_path.exists():
+            try:
+                with open(self.config_path, "r", encoding="utf-8") as f:
+                    return {**self.default_config, **json.load(f)}
+            except Exception as e:
+                print(f"Failed to load config, using defaults: {e}")
+        return self.default_config.copy()
+
+    def save_config(self) -> None:
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4)
+        except Exception as e:
+            print(f"Failed to save config: {e}")
+
+    def get(self, key: str, default=None):
+        return self.config.get(key, default)
+
+    def set(self, key: str, value) -> None:
+        self.config[key] = value
+        self.save_config()
 
 
 class ObjectPickerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Object Picker - Background Removal")
-        self.root.geometry("1000x800")
+        self.root.geometry("1100x800")
+
+        self.cfg = ConfigManager()
 
         # State variables
         self.img_path: Path | None = None
@@ -31,20 +71,39 @@ class ObjectPickerApp:
         self.rembg_session = None
         self.sam_predictor = None
 
+        self._setup_menu()
         self._setup_ui()
+        self.apply_theme()
+
+    def _setup_menu(self) -> None:
+        menubar = tk.Menu(self.root)
+
+        # File Menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        file_menu.add_command(label="Load Image", command=self.load_image)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
+        menubar.add_cascade(label="File", menu=file_menu)
+
+        # Edit/Settings Menu
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        edit_menu.add_command(label="Settings", command=self.open_settings)
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+
+        self.root.config(menu=menubar)
 
     def _setup_ui(self) -> None:
         # Top panel
-        btn_frame = tk.Frame(self.root, pady=10)
-        btn_frame.pack(side=tk.TOP, fill=tk.X)
+        self.btn_frame = tk.Frame(self.root, pady=10)
+        self.btn_frame.pack(side=tk.TOP, fill=tk.X)
 
-        tk.Button(btn_frame, text="Load Image", command=self.load_image, width=12).pack(side=tk.LEFT, padx=10)
+        tk.Button(self.btn_frame, text="Load Image", command=self.load_image, width=12).pack(side=tk.LEFT, padx=10)
 
         # Dropdown for model selection
-        tk.Label(btn_frame, text="Engine:").pack(side=tk.LEFT, padx=(10, 2))
+        tk.Label(self.btn_frame, text="Engine:").pack(side=tk.LEFT, padx=(10, 2))
         self.engine_var = tk.StringVar(value="rembg (isnet)")
         self.engine_dropdown = ttk.Combobox(
-            btn_frame,
+            self.btn_frame,
             textvariable=self.engine_var,
             values=["rembg (isnet)", "SAM (vit_b)"],
             state="readonly",
@@ -52,10 +111,28 @@ class ObjectPickerApp:
         )
         self.engine_dropdown.pack(side=tk.LEFT, padx=5)
 
-        tk.Button(btn_frame, text="Extract Selection", command=self.process_selection, width=15).pack(side=tk.LEFT,
-                                                                                                      padx=10)
+        # Margin/Padding Slider
+        tk.Label(self.btn_frame, text="Margin:").pack(side=tk.LEFT, padx=(10, 2))
+        self.margin_var = tk.IntVar(value=self.cfg.get("default_margin", 40))
+        self.margin_slider = tk.Scale(self.btn_frame, from_=-50, to=150, orient=tk.HORIZONTAL, variable=self.margin_var,
+                                      showvalue=False)
+        self.margin_slider.pack(side=tk.LEFT, padx=5)
 
-        self.top_status = tk.Label(btn_frame, text="Load an image to begin.", fg="gray")
+        # SAM Text Prompt (Dev placeholder)
+        tk.Label(self.btn_frame, text="SAM Prompt:").pack(side=tk.LEFT, padx=(10, 2))
+        self.sam_prompt_var = tk.StringVar()
+        self.sam_prompt_entry = tk.Entry(self.btn_frame, textvariable=self.sam_prompt_var, width=15)
+        self.sam_prompt_entry.pack(side=tk.LEFT, padx=5)
+
+        # Inpaint Toggle
+        self.inpaint_var = tk.BooleanVar(value=self.cfg.get("inpaint_enabled", False))
+        self.inpaint_check = tk.Checkbutton(self.btn_frame, text="Inpaint", variable=self.inpaint_var)
+        self.inpaint_check.pack(side=tk.LEFT, padx=10)
+
+        tk.Button(self.btn_frame, text="Extract Selection", command=self.process_selection, width=15).pack(side=tk.LEFT,
+                                                                                                           padx=10)
+
+        self.top_status = tk.Label(self.btn_frame, text="Load an image to begin.", fg="gray")
         self.top_status.pack(side=tk.RIGHT, padx=10)
 
         # Status Bar at the bottom
@@ -64,13 +141,74 @@ class ObjectPickerApp:
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         # Main canvas
-        self.canvas = tk.Canvas(self.root, bg="#2b2b2b", cursor="cross")
+        self.canvas = tk.Canvas(self.root, cursor="cross")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<Configure>", self.on_window_resize)
+
+    def apply_theme(self) -> None:
+        """Applies basic Light/Dark theming based on config."""
+        theme = self.cfg.get("theme", "System")
+
+        # Simple OS detection mock for "System"
+        if theme == "System":
+            try:
+                # Basic check for Windows dark mode registry or Mac dark mode
+                import winreg
+                registry = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
+                key = winreg.OpenKey(registry, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+                val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                theme = "Light" if val == 1 else "Dark"
+            except:
+                theme = "Dark"  # Fallback to Dark for Linux/Errors
+
+        if theme == "Dark":
+            bg_main, bg_sec, fg_main = "#1e1e1e", "#2b2b2b", "#ffffff"
+        else:
+            bg_main, bg_sec, fg_main = "#f0f0f0", "#e0e0e0", "#000000"
+
+        self.root.configure(bg=bg_main)
+        self.btn_frame.configure(bg=bg_main)
+        self.canvas.configure(bg=bg_sec)
+        self.status_bar.configure(bg=bg_main, fg=fg_main)
+        self.top_status.configure(bg=bg_main, fg=fg_main)
+        self.margin_slider.configure(bg=bg_main, highlightthickness=0)
+        self.inpaint_check.configure(bg=bg_main, fg=fg_main, selectcolor=bg_sec)
+
+        for widget in self.btn_frame.winfo_children():
+            if isinstance(widget, tk.Label):
+                widget.configure(bg=bg_main, fg=fg_main)
+
+    def open_settings(self) -> None:
+        top = tk.Toplevel(self.root)
+        top.title("Settings")
+        top.geometry("400x250")
+        top.grab_set()
+
+        # Theme
+        tk.Label(top, text="Theme:").grid(row=0, column=0, padx=10, pady=15, sticky="e")
+        theme_var = tk.StringVar(value=self.cfg.get("theme"))
+        theme_cb = ttk.Combobox(top, textvariable=theme_var, values=["System", "Light", "Dark"], state="readonly")
+        theme_cb.grid(row=0, column=1, padx=10, pady=15, sticky="w")
+
+        # Filename template
+        tk.Label(top, text="Output Filename Template:\n(Use filename$ for original name)").grid(row=1, column=0,
+                                                                                                padx=10, pady=10,
+                                                                                                sticky="e")
+        template_var = tk.StringVar(value=self.cfg.get("filename_template"))
+        template_entry = tk.Entry(top, textvariable=template_var, width=25)
+        template_entry.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+
+        def save_settings() -> None:
+            self.cfg.set("theme", theme_var.get())
+            self.cfg.set("filename_template", template_var.get())
+            self.apply_theme()
+            top.destroy()
+
+        tk.Button(top, text="Save", command=save_settings, width=15).grid(row=2, column=0, columnspan=2, pady=20)
 
     def load_rembg(self) -> bool:
         if self.rembg_session is None:
@@ -208,14 +346,6 @@ class ObjectPickerApp:
         x1, x2 = min(x1, x2), max(x1, x2)
         y1, y2 = min(y1, y2), max(y1, y2)
 
-        img_w, img_h = self.original_img.size
-        # No extra padding for SAM, it prefers tight boxes. Padding kept for rembg.
-        padding = 40 if self.engine_var.get() == "rembg (isnet)" else 0
-        x1 = max(0, x1 - padding)
-        y1 = max(0, y1 - padding)
-        x2 = min(img_w, x2 + padding)
-        y2 = min(img_h, y2 + padding)
-
         self.bbox = (x1, y1, x2, y2)
         self.update_status_bar(x2 - x1, y2 - y1)
 
@@ -231,23 +361,39 @@ class ObjectPickerApp:
         self.top_status.config(text=f"Processing with {engine}...")
         self.root.update()
 
+        # Save current config state for logic
+        self.cfg.set("default_margin", self.margin_var.get())
+        self.cfg.set("inpaint_enabled", self.inpaint_var.get())
+
         try:
+            # Apply padding/margin
+            padding = self.margin_var.get()
+            img_w, img_h = self.original_img.size
+
+            x1 = max(0, self.bbox[0] - padding)
+            y1 = max(0, self.bbox[1] - padding)
+            x2 = min(img_w, self.bbox[2] + padding)
+            y2 = min(img_h, self.bbox[3] + padding)
+            working_bbox = (x1, y1, x2, y2)
+
             if engine == "rembg (isnet)":
                 if not self.load_rembg(): return
-                cropped_img = self.original_img.crop(self.bbox)
+                cropped_img = self.original_img.crop(working_bbox)
                 output_img = remove(cropped_img, session=self.rembg_session)
 
             elif engine == "SAM (vit_b)":
                 if not self.load_sam(): return
-
-                # 1. Convert PIL to RGB numpy array for SAM
                 image_array = np.array(self.original_img.convert("RGB"))
                 self.sam_predictor.set_image(image_array)
 
-                # 2. Format bounding box for SAM
-                input_box = np.array(self.bbox)
+                input_box = np.array(working_bbox)
 
-                # 3. Predict mask based on the box
+                # DEV Note: Standard SAM doesn't take text prompts.
+                # This grabs the entry value for future GroundingDINO integration.
+                custom_prompt = self.sam_prompt_var.get().strip()
+                if custom_prompt:
+                    print(f"DEV LOG: Custom SAM prompt detected ('{custom_prompt}'). Awaiting LangSAM integration.")
+
                 masks, _, _ = self.sam_predictor.predict(
                     point_coords=None,
                     point_labels=None,
@@ -255,16 +401,18 @@ class ObjectPickerApp:
                     multimask_output=False,
                 )
 
-                # 4. Convert the boolean mask back into a PIL Image alpha channel
                 mask_array = (masks[0] * 255).astype(np.uint8)
                 mask_img = Image.fromarray(mask_array).convert("L")
 
-                # Apply mask to the original image
                 output_img = self.original_img.copy()
                 output_img.putalpha(mask_img)
+                output_img = output_img.crop(working_bbox)
 
-                # Crop to the bounding box so the output isn't the size of the whole original image
-                output_img = output_img.crop(self.bbox)
+            # --- Stub for Inpainting Logic ---
+            if self.inpaint_var.get():
+                print("DEV LOG: Inpainting triggered! Passing mask to inpaint pipeline...")
+                # Tu w przyszłości odpalimy np. prosty cv2.inpaint albo połączymy z lokalnym LaMa.
+                # Na ten moment model dostaje informację z UI, a obrazek idzie dalej do akceptacji.
 
             self.show_approval_window(output_img)
             self.top_status.config(text="Waiting for user approval...")
@@ -285,8 +433,17 @@ class ObjectPickerApp:
         ctrl_frame.pack(side=tk.TOP, fill=tk.X)
         tk.Label(ctrl_frame, text="Select Background:").pack(side=tk.LEFT, padx=10)
 
-        preview_canvas = tk.Canvas(top, bg="#2b2b2b")
+        preview_canvas = tk.Canvas(top)
         preview_canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Basic theme sync for Toplevel
+        theme = self.cfg.get("theme", "System")
+        if theme == "Dark" or (theme == "System" and self.root.cget('bg') == "#1e1e1e"):
+            top.configure(bg="#1e1e1e")
+            ctrl_frame.configure(bg="#1e1e1e")
+            preview_canvas.configure(bg="#2b2b2b")
+            for child in ctrl_frame.winfo_children():
+                if isinstance(child, tk.Label): child.configure(bg="#1e1e1e", fg="#ffffff")
 
         def render_preview() -> None:
             if self.selected_bg_color is None:
@@ -314,7 +471,6 @@ class ObjectPickerApp:
             preview_canvas.image = tk_preview
             preview_canvas.create_image(canvas_w // 2, canvas_h // 2, anchor=tk.CENTER, image=tk_preview)
 
-        # Re-render on window resize to keep it centered and scaled
         preview_canvas.bind("<Configure>", lambda e: render_preview())
 
         def set_bg_transparent() -> None:
@@ -338,17 +494,22 @@ class ObjectPickerApp:
         tk.Button(ctrl_frame, text="Custom...", command=set_bg_custom).pack(side=tk.LEFT, padx=5)
 
         btn_frame = tk.Frame(top)
+        if top.cget('bg') == "#1e1e1e": btn_frame.configure(bg="#1e1e1e")
         btn_frame.pack(side=tk.BOTTOM, pady=20)
 
         def approve() -> None:
             out_dir = self.img_path.parent / "masked_photos"
             out_dir.mkdir(exist_ok=True)
 
+            # Zastosowanie szablonu z configu
+            template = self.cfg.get("filename_template", "filename$_extracted")
+            file_stem = template.replace("filename$", self.img_path.stem)
+
             if self.selected_bg_color is None:
-                save_path = out_dir / f"{self.img_path.stem}_extracted.png"
+                save_path = out_dir / f"{file_stem}.png"
                 extracted_img.save(save_path)
             else:
-                save_path = out_dir / f"{self.img_path.stem}_extracted.jpg"
+                save_path = out_dir / f"{file_stem}.jpg"
                 bg = Image.new("RGBA", extracted_img.size, self.selected_bg_color + (255,))
                 final_img = Image.alpha_composite(bg, extracted_img).convert("RGB")
                 final_img.save(save_path, quality=95)
