@@ -558,35 +558,44 @@ class ObjectPickerApp:
                 mask_img = mask_img.crop(working_bbox)
 
             if self.inpaint_var.get() and not isinstance(mask_img, int):
-                self.status_bar.config(text=f"Wypełnianie braków ({inpaint_method})...")
+                self.status_bar.config(text=f"Filling in ({inpaint_method})...")
                 self.root.update()
 
                 try:
                     import cv2
-                    # 1. Find internal "holes" in the object using Convex Hull
+
+                    # Convert PIL mask to OpenCV array
                     mask_cv = np.array(mask_img)
                     _, binary = cv2.threshold(mask_cv, 127, 255, cv2.THRESH_BINARY)
 
+                    # Find contours to build a convex hull
                     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     filled_mask_cv = np.zeros_like(binary)
 
                     if contours:
-                        # Grab the largest contour (the object)
                         main_contour = max(contours, key=cv2.contourArea)
-                        # Create a convex hull to "bridge" the gap left by the thumb
                         hull = cv2.convexHull(main_contour)
                         cv2.drawContours(filled_mask_cv, [hull], -1, 255, thickness=cv2.FILLED)
 
-                    # The inpaint mask is the hull area MINUS the original mask (the thumbhole!)
+                    # Isolate the hole (Hull area minus original mask)
                     hole_mask_cv = cv2.bitwise_and(filled_mask_cv, cv2.bitwise_not(binary))
-                    inpaint_mask = Image.fromarray(hole_mask_cv)
 
-                    # The new alpha mask ensures the inpainted area stays visible
-                    new_alpha_mask = Image.fromarray(filled_mask_cv)
+                    # MAGIC FIX: DILATION
+                    # We dilate the hole mask to eat into the clean plastic pixels, destroying
+                    # the 1px skin/desk colored rim left by the segmentation model.
+                    kernel = np.ones((9, 9), np.uint8)
+                    hole_mask_cv_dilated = cv2.dilate(hole_mask_cv, kernel, iterations=1)
 
+                    inpaint_mask = Image.fromarray(hole_mask_cv_dilated)
+
+                    # Alpha mask must keep the original object PLUS the newly inpainted hole area
+                    new_alpha_mask_cv = cv2.bitwise_or(binary, hole_mask_cv_dilated)
+                    new_alpha_mask = Image.fromarray(new_alpha_mask_cv)
+
+                    # Inpaint!
                     inpainted_img = self.inpaint_model.process(output_img, inpaint_mask, inpaint_method)
 
-                    # Apply the NEW solid mask
+                    # Apply the solid alpha mask back to reveal the magic
                     inpainted_img.putalpha(new_alpha_mask)
                     output_img = inpainted_img
                 except Exception as e:
