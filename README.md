@@ -39,7 +39,8 @@ Similarly with LaMa and OpenCV, but LaMa is recommended.
 
 And oh well you might want to use the gui, which uses Tkinter.
 
-> [!NOTE] If pip or other package manager complains about incompatible versions try to install the ones supported by the models, since they might be more fussy. Other things should work fine.
+> [!NOTE]
+> If pip or other package manager complains about incompatible versions try to install the ones supported by the models, since they might be more fussy. Other things should work fine.
 
 > **1** Runtime for rembg
 
