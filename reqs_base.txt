@@ -1,0 +1,8 @@
+Pillow>=12.2.0
+numpy>=2.4.3
+rembg>=2.0.75
+torch>=2.11.0
+torchvision>=0.26.0
+segment-anything>=1.0
+opencv-python>=4.13.0
+simple-lama-inpainting>=0.1.2
