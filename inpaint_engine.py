@@ -6,6 +6,7 @@ class InpaintEngine:
     """Module for inpainting. Supports multiple underlying engines (OpenCV, LaMa)."""
 
     def __init__(self) -> None:
+        """Initializes InpaintEngine with lazy-loaded model placeholder."""
         self.lama_model = None
 
     def _load_lama(self) -> None:
@@ -16,7 +17,17 @@ class InpaintEngine:
             self.lama_model = SimpleLama()
 
     def _apply_opencv(self, img_pil: Image.Image, mask_pil: Image.Image) -> Image.Image:
-        """Uses classic OpenCV Telea algorithm for inpainting."""
+        """Applies OpenCV Telea algorithm for fast inpainting of masked regions.
+        
+        Args:
+            img_pil: RGBA PIL Image with extracted object. Regions marked by mask
+                will be filled using neighboring pixel propagation.
+            mask_pil: Grayscale (L mode) PIL Image where white (255) marks regions
+                to inpaint. Black (0) are regions to preserve.
+        
+        Returns:
+            RGBA PIL Image same size as input with Telea-inpainted background.
+        """
         import cv2
 
         # Convert PIL -> OpenCV (RGB to BGR)
@@ -31,7 +42,17 @@ class InpaintEngine:
         return Image.fromarray(cv2.cvtColor(inpainted, cv2.COLOR_BGR2RGBA))
 
     def _apply_lama(self, img_pil: Image.Image, mask_pil: Image.Image) -> Image.Image:
-        """Uses LaMa neural network for inpainting."""
+        """Applies LaMa neural network inpainting to fill masked regions.
+        
+        Args:
+            img_pil: RGBA PIL Image with extracted object. Regions marked by mask
+                will be filled with inpainted content.
+            mask_pil: Grayscale (L mode) PIL Image where white (255) marks regions
+                to inpaint. Black (0) are regions to preserve.
+        
+        Returns:
+            RGBA PIL Image same size as input with inpainted background.
+        """
         self._load_lama()
         # simple_lama takes PIL objects directly
         # Needs RGB image and Grayscale (L) mask
@@ -44,7 +65,21 @@ class InpaintEngine:
         return result.convert('RGBA')
 
     def process(self, img_pil: Image.Image, mask_pil: Image.Image, method: str) -> Image.Image:
-        """Main API for the module. Delegates to the selected engine."""
+        """Main entry point for inpainting. Routes to selected inpainting engine.
+        
+        Args:
+            img_pil: RGBA PIL Image with extracted object to inpaint.
+            mask_pil: Grayscale (L mode) PIL Image: white (255) regions to inpaint,
+                black (0) regions to preserve.
+            method: Inpainting algorithm: 'OpenCV' (Telea, fast, good for small holes)
+                or 'LaMa' (neural network, slower, better quality).
+        
+        Returns:
+            RGBA PIL Image same size as input with inpainted background.
+        
+        Raises:
+            ValueError: If method is not 'OpenCV' or 'LaMa'.
+        """
         if method == "OpenCV":
             return self._apply_opencv(img_pil, mask_pil)
         elif method == "LaMa":

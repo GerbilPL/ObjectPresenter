@@ -8,6 +8,7 @@ class ProgressTracker:
     """
 
     def __init__(self) -> None:
+        """Initializes thread-safe progress tracking with default state."""
         self._lock = threading.Lock()
         self.total_items = 1
         self.current_item = 0
@@ -16,7 +17,12 @@ class ProgressTracker:
         self.is_cancelled = False
 
     def start_batch(self, total_items: int) -> None:
-        """Initializes state for a new batch of tasks."""
+        """Initializes progress tracker for a new batch of tasks.
+        
+        Args:
+            total_items: Total number of items to process in batch.
+                Must be >= 1, automatically clamped to 1 if smaller.
+        """
         with self._lock:
             self.total_items = max(1, total_items)
             self.current_item = 0
@@ -25,7 +31,12 @@ class ProgressTracker:
             self.status = "Starting batch processing..."
 
     def set_current_item(self, index: int, status: str = "") -> None:
-        """Moves the tracker to the next item in the batch."""
+        """Updates tracker to a specific item and resets item-level progress.
+        
+        Args:
+            index: Zero-based index of current item in batch.
+            status: Optional status message (empty string = no update).
+        """
         with self._lock:
             self.current_item = index
             self.item_progress = 0.0
@@ -33,7 +44,12 @@ class ProgressTracker:
                 self.status = status
 
     def update_progress(self, progress: float, status: str = None) -> None:
-        """Updates progress of the current item."""
+        """Updates item-level progress and optionally status message.
+        
+        Args:
+            progress: Item progress 0.0-100.0. Automatically clamped to valid range.
+            status: Optional status message (None = no update, existing status kept).
+        """
         with self._lock:
             self.item_progress = max(0.0, min(100.0, progress))
             if status is not None:
@@ -46,13 +62,26 @@ class ProgressTracker:
             self.status = "Canceling... please wait."
 
     def check_cancelled(self) -> None:
-        """Raises InterruptedError if cancellation was requested."""
+        """Checks if cancellation was requested by user.
+        
+        Raises:
+            InterruptedError: If is_cancelled flag is True. Worker threads should
+                catch and handle this to gracefully stop processing.
+        """
         with self._lock:
             if self.is_cancelled:
                 raise InterruptedError("Process was cancelled by the user.")
 
     def get_state(self) -> dict:
-        """Returns a snapshot of the current progress (thread-safe)."""
+        """Returns thread-safe snapshot of current progress state.
+        
+        Returns:
+            Dict with keys:
+                'overall_progress': 0.0-100.0, batch-wide progress.
+                'item_progress': 0.0-100.0, current item progress.
+                'status': Status message string.
+                'is_cancelled': Boolean cancellation flag.
+        """
         with self._lock:
             # Calculate overall progress across the entire batch
             overall = ((self.current_item + (self.item_progress / 100.0)) / self.total_items) * 100.0

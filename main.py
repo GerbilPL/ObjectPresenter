@@ -11,13 +11,13 @@ def check_cuda_cli(device_preference):
     try:
         import torch
         if not torch.cuda.is_available():
-            print("\n⚠️  WARNING: CUDA (GPU) not detected. PyTorch will use the CPU.")
+            print("\n!!! WARNING: CUDA (GPU) not detected. PyTorch will use the CPU.")
             print("   Processing will be significantly slower.\n")
             if device_preference == "CUDA":
-                print("❌  Error: CUDA was forced (--device CUDA) but is unavailable.")
+                print("!!!  ERROR: CUDA was forced (--device CUDA) but is unavailable.")
                 sys.exit(1)
     except ImportError:
-        print("\n⚠️  WARNING: PyTorch is not installed. SAM engine will fail.\n")
+        print("\n!!! WARNING: PyTorch is not installed. SAM engine will fail.\n")
 
 
 def main():

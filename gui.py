@@ -13,7 +13,17 @@ from progress_tracker import ProgressTracker
 
 
 class ObjectPickerApp:
+    """Main GUI application for background removal and inpainting of images.
+    
+    Supports single image and batch processing workflows with interactive
+    bounding box selection, device preference management, and background composition.
+    """
     def __init__(self, root: tk.Tk) -> None:
+        """Initializes the ObjectPickerApp with GUI components and state.
+        
+        Args:
+            root: The Tkinter root window.
+        """
         self.root = root
         self.root.title("Object Picker - Background Removal & Inpainting")
         self.root.geometry("1100x800")
@@ -81,21 +91,22 @@ class ObjectPickerApp:
 
         pref = self.device_var.get()
         if pref == "CPU":
-            text = " 🔴 CPU (Forced) "
+            text = " CPU (Forced) "
         elif pref == "CUDA":
             if self.has_cuda:
-                text = " 🟢 GPU (Forced) "
+                text = " GPU (Forced) "
             else:
-                text = " ⚠️ GPU Unavailable! "
+                text = " GPU Unavailable! "
         else:  # Auto
             if self.has_cuda:
-                text = " 🟢 GPU (Auto) "
+                text = " GPU (Auto) "
             else:
-                text = " 🔴 CPU (Auto) "
+                text = " CPU (Auto) "
 
         self.hw_status_label.config(text=text)
 
     def _setup_menu(self) -> None:
+        """Creates and configures the application menu bar with File and Edit menus."""
         menubar = tk.Menu(self.root)
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Load Single Image", command=self.load_single_image)
@@ -110,6 +121,7 @@ class ObjectPickerApp:
         self.root.config(menu=menubar)
 
     def _setup_ui(self) -> None:
+        """Builds all UI elements including scrollable toolbar, canvas, and status panels."""
         # --- Top Menu with Scrollbar for resize protection ---
         self.top_scroll_frame = tk.Frame(self.root)
         self.top_scroll_frame.pack(side=tk.TOP, fill=tk.X)
@@ -168,7 +180,7 @@ class ObjectPickerApp:
         self.margin_slider = tk.Scale(
             margin_frame, from_=-50, to=70, orient=tk.HORIZONTAL,
             variable=self.margin_var, showvalue=False, length=100,
-            command=self.on_margin_slider_change
+            command=self.on_margin_slider_change # TODO: change to update_margin_visuals and test
         )
         self.margin_slider.pack(side=tk.LEFT, padx=5)
 
@@ -247,6 +259,11 @@ class ObjectPickerApp:
         self.on_margin_slider_change(self.margin_var.get())
 
     def apply_theme(self) -> None:
+        """Applies the selected theme (System, Light, Dark, or Time-Based) to all UI elements.
+        
+        Dynamically adjusts colors based on theme preference and recursively
+        updates all child widgets.
+        """
         theme = self.cfg.get("theme", "System")
 
         if theme == "Time-Based":
@@ -309,6 +326,7 @@ class ObjectPickerApp:
         recursive_theme(self.bottom_frame)
 
     def open_settings(self) -> None:
+        """Opens a modal settings dialog for theme, timing, and filename template configuration."""
         top = tk.Toplevel(self.root)
         top.title("Settings")
         # Removed hardcoded geometry to let it auto-wrap elements natively
@@ -382,6 +400,15 @@ class ObjectPickerApp:
                                                                                            columnspan=2, pady=20)
 
     def handle_inpaint_error(self, err_msg: str, module_name: str) -> bool:
+        """Displays an error dialog when inpainting module initialization fails.
+        
+        Args:
+            err_msg: Error message or traceback to display.
+            module_name: Name of the failed inpainting module.
+            
+        Returns:
+            True if user chooses to continue, False if user aborts.
+        """
         dialog = tk.Toplevel(self.root)
         dialog.title("Module Load Error")
         dialog.geometry("650x450")
@@ -436,12 +463,22 @@ class ObjectPickerApp:
         return self.continue_flag
 
     def update_status_text(self, text: str) -> None:
+        """Updates the status bar text if the widget exists.
+        
+        Args:
+            text: Status message to display.
+        """
         if self.status_bar.winfo_exists():
             self.status_bar.config(text=text)
 
     # --- CANVAS LOGIC & IMAGE LOADING ---
 
     def calculate_margin_px(self) -> int:
+        """Calculates the margin in pixels based on current margin settings and bbox.
+        
+        Returns:
+            Margin in pixels (absolute or relative based on margin_rel_var).
+        """
         if not self.bbox: return 0
         val = self.margin_var.get()
         if self.margin_rel_var.get():
@@ -451,11 +488,20 @@ class ObjectPickerApp:
         return val
 
     def on_margin_slider_change(self, val) -> None:
+        """Handles margin slider value changes and updates the display label.
+        
+        Args:
+            val: New margin slider value.
+        """
         suffix = "%" if self.margin_rel_var.get() else "px"
         self.margin_val_label.config(text=f"Margin: {self.margin_var.get()}{suffix}")
         self.update_margin_visuals()
 
     def update_margin_visuals(self, *args) -> None:
+        """Updates the margin rectangle visualization on the canvas.
+        
+        Redraws the dashed rectangle showing the expanded bounding box with margin.
+        """
         suffix = "%" if self.margin_rel_var.get() else "px"
         self.margin_val_label.config(text=f"Margin: {self.margin_var.get()}{suffix}")
 
@@ -481,6 +527,12 @@ class ObjectPickerApp:
         self.margin_rect_id = self.canvas.create_rectangle(cx1, cy1, cx2, cy2, outline="#ff9800", width=2, dash=(2, 4))
 
     def update_status_bar(self, selection_w: int = 0, selection_h: int = 0) -> None:
+        """Updates the status bar with current selection and image dimensions.
+        
+        Args:
+            selection_w: Width of the current selection in pixels (default: 0).
+            selection_h: Height of the current selection in pixels (default: 0).
+        """
         if self.original_img:
             img_w, img_h = self.original_img.size
             self.status_bar.config(
@@ -489,6 +541,7 @@ class ObjectPickerApp:
             self.status_bar.config(text="Ready | Selection: 0x0 | Image: 0x0")
 
     def _clear_canvas_overlays(self):
+        """Clears all bounding box and margin rectangle overlays from the canvas."""
         self.bbox = None
         if self.rect_id:
             self.canvas.delete(self.rect_id)
@@ -498,6 +551,7 @@ class ObjectPickerApp:
             self.margin_rect_id = None
 
     def load_single_image(self) -> None:
+        """Opens file dialog to load a single image and displays it on canvas."""
         filepath = filedialog.askopenfilename(filetypes=[("Images", "*.jpg *.jpeg *.png")])
         if not filepath: return
         self.is_batch_mode = False
@@ -512,6 +566,7 @@ class ObjectPickerApp:
         self.update_status_bar()
 
     def load_batch_images(self) -> None:
+        """Opens file dialog to load multiple images for batch processing."""
         filepaths = filedialog.askopenfilenames(title="Select multiple images for batch processing",
                                                 filetypes=[("Images", "*.jpg *.jpeg *.png")])
         if not filepaths: return
@@ -523,6 +578,10 @@ class ObjectPickerApp:
         self.load_next_batch_image()
 
     def load_next_batch_image(self) -> None:
+        """Loads the next image from the batch queue or starts processing if queue is empty.
+        
+        Updates the UI with batch progress information.
+        """
         if not self.batch_files:
             self.start_processing()
             return
@@ -539,6 +598,10 @@ class ObjectPickerApp:
         self.update_status_text(f"Batch Mode: Draw bounding box for {self.img_path.name} and press Enter")
 
     def display_image(self) -> None:
+        """Renders the current image on canvas, scaled to fit the viewport.
+        
+        Recalculates scale factor and redraws any active bounding box overlays.
+        """
         if not self.original_img: return
         canvas_w = self.canvas.winfo_width()
         canvas_h = self.canvas.winfo_height()
@@ -562,10 +625,16 @@ class ObjectPickerApp:
             self.update_margin_visuals()
 
     def on_window_resize(self, event: tk.Event) -> None:
+        """Handles canvas resize events with debouncing to avoid excessive redraws.
+        
+        Args:
+            event: The resize event from Tkinter.
+        """
         if self.resize_timer: self.root.after_cancel(self.resize_timer)
         self.resize_timer = self.root.after(100, self.display_image)
 
     def draw_scaled_bbox(self) -> None:
+        """Draws the scaled bounding box on the canvas at current scale factor."""
         if not self.bbox: return
         x1, y1, x2, y2 = self.bbox
         cx1 = int(x1 * self.scale_factor) + self.img_x
@@ -577,11 +646,28 @@ class ObjectPickerApp:
         self.rect_id = self.canvas.create_rectangle(cx1, cy1, cx2, cy2, outline="#00e5ff", width=2, dash=(4, 4))
 
     def get_real_coords(self, cx: int, cy: int) -> tuple[int, int]:
+        """Converts canvas pixel coordinates to original image coordinates.
+        
+        Accounts for image centering, scaling, and translation on canvas.
+        Used to map mouse events to bounding box coordinates in original image space.
+        
+        Args:
+            cx: Canvas pixel X coordinate (0 = left edge of canvas).
+            cy: Canvas pixel Y coordinate (0 = top edge of canvas).
+        
+        Returns:
+            Tuple of (image_x, image_y) in original image's coordinate space.
+        """
         rx = int((cx - self.img_x) / self.scale_factor)
         ry = int((cy - self.img_y) / self.scale_factor)
         return rx, ry
 
     def on_press(self, event: tk.Event) -> None:
+        """Handles mouse button press to start drawing a bounding box.
+        
+        Args:
+            event: The mouse press event.
+        """
         if not self.display_img: return
         self.start_x, self.start_y = event.x, event.y
         if self.rect_id: self.canvas.delete(self.rect_id)
@@ -589,6 +675,11 @@ class ObjectPickerApp:
                                                     outline="#00e5ff", width=2, dash=(4, 4))
 
     def on_drag(self, event: tk.Event) -> None:
+        """Handles mouse drag to update the bounding box rectangle in real-time.
+        
+        Args:
+            event: The mouse motion event.
+        """
         if not self.display_img or not self.rect_id: return
         self.canvas.coords(self.rect_id, self.start_x, self.start_y, event.x, event.y)
         rx1, ry1 = self.get_real_coords(self.start_x, self.start_y)
@@ -599,6 +690,11 @@ class ObjectPickerApp:
         self.update_margin_visuals()
 
     def on_release(self, event: tk.Event) -> None:
+        """Handles mouse button release to finalize the bounding box.
+        
+        Args:
+            event: The mouse release event.
+        """
         if not self.display_img or not self.rect_id: return
         rx1, ry1 = self.get_real_coords(self.start_x, self.start_y)
         rx2, ry2 = self.get_real_coords(event.x, event.y)
@@ -609,6 +705,10 @@ class ObjectPickerApp:
     # --- PROCESSING WIZARD & THREADS ---
 
     def on_action_click(self) -> None:
+        """Handles the main action button click (Extract or Next Image in batch mode).
+        
+        Validates bounding box and queues the task for processing.
+        """
         if not self.original_img or not self.img_path:
             return
 
@@ -642,6 +742,11 @@ class ObjectPickerApp:
             self.start_processing()
 
     def start_processing(self) -> None:
+        """Initiates batch processing and launches the worker thread.
+        
+        Validates hardware availability, preloads inpainting modules, and starts
+        the background processing thread.
+        """
         if not self.batch_tasks:
             return
 
@@ -696,7 +801,22 @@ class ObjectPickerApp:
         self.root.after(100, self._check_progress)
 
     def _process_worker(self, engine, inpaint_enabled, inpaint_method, device_preference):
-        """Worker thread executing the Heavy AI processing over all tasks."""
+        """Worker thread that processes all queued tasks sequentially.
+        
+        Runs in background thread, iterating over self.batch_tasks, calling
+        ImageProcessor.process() for each task, and collecting results into
+        self.batch_results. Respects ProgressTracker cancellation flag.
+        
+        Args:
+            engine: The AI engine to use: 'rembg (isnet)' or 'SAM (vit_b)'.
+                'rembg' faster, general-purpose; 'SAM' more precise box-guided.
+            inpaint_enabled: If True, fills mask holes. If False, outputs extracted
+                object with alpha transparency only.
+            inpaint_method: When inpaint_enabled=True: 'OpenCV' (fast Telea algorithm)
+                or 'LaMa' (neural network, slower but higher quality).
+            device_preference: Hardware selection: 'Auto' (auto-detect GPU availability),
+                'CUDA' (require GPU, error if unavailable), 'CPU' (force CPU).
+        """
         try:
             for idx, task in enumerate(self.batch_tasks):
                 if self.tracker.is_cancelled:
@@ -733,6 +853,10 @@ class ObjectPickerApp:
             self.process_error = str(e)
 
     def _check_progress(self) -> None:
+        """Polls progress tracker and updates UI, then schedules next poll.
+        
+        Runs repeatedly until processing completes, showing item and batch progress.
+        """
         if not self.tracker: return
 
         state = self.tracker.get_state()
@@ -762,6 +886,7 @@ class ObjectPickerApp:
                 self.show_batch_approval_window()
 
     def cancel_processing(self) -> None:
+        """Signals cancellation to the active processing thread."""
         if self.tracker:
             self.tracker.cancel()
             self.cancel_btn.config(state=tk.DISABLED)
@@ -769,7 +894,14 @@ class ObjectPickerApp:
     # --- BATCH REVIEW WINDOW ---
 
     def _get_output_filename(self, res_dict: dict) -> str:
-        """Helper to compute exact file name based on template and current settings."""
+        """Computes the output filename based on template and result metadata.
+        
+        Args:
+            res_dict: Result dictionary with path, bg_type, bg_val, and engine info.
+            
+        Returns:
+            Generated filename with extension based on background type.
+        """
         path = res_dict["path"]
         bg_type = res_dict["bg_type"]
         bg_val = res_dict["bg_val"]
@@ -795,6 +927,11 @@ class ObjectPickerApp:
         return f"{file_stem}{ext}"
 
     def show_batch_approval_window(self) -> None:
+        """Opens the batch review and background selection modal dialog.
+        
+        Displays processed images with dual view modes (List/Preview) and allows
+        users to select backgrounds, mark for re-edit, and approve/discard results.
+        """
         if not self.batch_results:
             return
 
@@ -1052,7 +1189,19 @@ class ObjectPickerApp:
             self.lbl_info_right.configure(fg="#005a9e")
 
         def composite_image(extracted_img: Image.Image, res: dict) -> Image.Image:
-            """Handles the background compositing logic."""
+            """Composites the extracted image over a background (color or image).
+            
+            Args:
+                extracted_img: RGBA PIL Image with extracted object (transparent outside mask).
+                res: Result dictionary with keys:
+                    'bg_type': 'color' or 'image'
+                    'bg_val': RGB tuple (r, g, b) if color, None for transparent checkerboard,
+                        or PIL Image if bg_type='image'
+                    'bg_img_mode': 'Center' (center image, pad) or 'Stretch' (scale to fill)
+            
+            Returns:
+                Composited image showing extracted object on selected background.
+            """
             bg_type = res["bg_type"]
             bg_val = res["bg_val"]
 
@@ -1085,6 +1234,7 @@ class ObjectPickerApp:
                 return Image.alpha_composite(bg_img, extracted_img)
 
         def render_preview() -> None:
+            """Renders the current selected image with applied background settings to the preview canvas."""
             if not self.batch_results: return
 
             current_res = self.batch_results[self.current_preview_idx]
@@ -1128,10 +1278,16 @@ class ObjectPickerApp:
                 text=f"Resolution: {w}x{h} px\nModel: {current_res['engine']}\nHardware: {current_res['device']}")
 
         def on_select_sync():
+            """Synchronizes the re-edit checkbox and re-renders preview for the selected image."""
             self.reedit_var.set(self.batch_results[self.current_preview_idx].get("reedit", False))
             render_preview()
 
         def on_select(event):
+            """Handles listbox selection events.
+            
+            Args:
+                event: The listbox selection event.
+            """
             selection = listbox.curselection()
             if selection:
                 self.current_preview_idx = selection[0]
@@ -1141,6 +1297,7 @@ class ObjectPickerApp:
         preview_canvas.bind("<Configure>", lambda e: render_preview())
 
         def toggle_reedit() -> None:
+            """Toggles the re-edit flag for the current image and updates list display."""
             if not self.batch_results: return
             idx = self.current_preview_idx
             is_reedit = self.reedit_var.get()
@@ -1160,12 +1317,14 @@ class ObjectPickerApp:
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15, padx=20)
 
         def clean_up_progress():
+            """Resets progress tracking and clears batch task/result queues."""
             self.overall_progress_var.set(0)
             self.item_progress_var.set(0)
             self.batch_tasks = []
             self.batch_results = []
 
         def approve_all() -> None:
+            """Saves approved images to disk with configured backgrounds, marks re-edit items for reprocessing."""
             saved_count = 0
             reedit_files = []
 
@@ -1225,6 +1384,7 @@ class ObjectPickerApp:
                 self.is_batch_mode = False
 
         def discard() -> None:
+            """Closes the approval window and clears all batch results without saving."""
             self.update_status_text("Review window closed / discarded.")
             clean_up_progress()
             self.is_batch_mode = False

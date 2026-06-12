@@ -11,6 +11,7 @@ class ImageProcessor:
     """Handles all heavy lifting regarding image manipulation, AI model inference, and masking."""
 
     def __init__(self):
+        """Initializes ImageProcessor with lazy-loaded model placeholders."""
         self.rembg_session = None
         self.sam_predictor = None
         self.inpaint_model = InpaintEngine()
@@ -35,14 +36,37 @@ class ImageProcessor:
         print("DEV LOG: Models cleared from memory. Ready for re-initialization.")
 
     def preload_inpaint(self, method: str) -> None:
-        """Dummy call to trigger lazy loading & catch import errors early."""
+        """Preloads inpainting module to catch import errors before processing starts.
+        
+        Attempts to import and initialize the selected inpainting module.
+        If import fails, exception is raised early so user can fix dependencies.
+        
+        Args:
+            method: Inpainting method to load: 'OpenCV' (requires cv2) or
+                'LaMa' (requires simple-lama package).
+        
+        Raises:
+            ImportError: If required package not installed.
+        """
         if method == "OpenCV":
             import cv2  # Trigger import error if not installed
         elif method == "LaMa":
             self.inpaint_model._load_lama()
 
     def load_rembg(self, device_preference: str = "Auto") -> None:
-        """Lazy loads the rembg model, respecting device preference."""
+        """Lazy loads the rembg background removal model on first call.
+        
+        Initializes rembg's isnet-general-use model with configured execution
+        providers. Subsequent calls are no-ops (model already cached).
+        
+        Args:
+            device_preference: Where to run model: 'Auto' (auto-detect, prefer GPU),
+                'CUDA' (force ONNX CUDA provider), 'CPU' (force ONNX CPU provider).
+                Default is 'Auto'.
+        
+        Raises:
+            Exception: If rembg package missing or model download fails.
+        """
         if self.rembg_session is None:
             from rembg import new_session
             providers = None  # None lets rembg use its default Auto behavior
@@ -54,7 +78,20 @@ class ImageProcessor:
             self.rembg_session = new_session("isnet-general-use", providers=providers)
 
     def load_sam(self, device_preference: str = "Auto") -> None:
-        """Lazy loads the SAM model, respecting device preference."""
+        """Lazy loads the SAM (Segment Anything Model) checkpoint on first call.
+        
+        Loads the Vision Transformer B (vit_b) variant to selected device.
+        Subsequent calls are no-ops (model already cached in self.sam_predictor).
+        
+        Args:
+            device_preference: Where to run model: 'Auto' (auto-detect CUDA availability),
+                'CUDA' (force CUDA, error if unavailable), 'CPU' (force CPU). Default 'Auto'.
+        
+        Raises:
+            FileNotFoundError: If sam_vit_b_01ec64.pth checkpoint missing.
+            RuntimeError: If device_preference='CUDA' but CUDA unavailable.
+            Exception: If PyTorch or segment_anything package missing.
+        """
         if self.sam_predictor is None:
             checkpoint_path = "sam_vit_b_01ec64.pth"
             if not os.path.exists(checkpoint_path):
@@ -85,8 +122,35 @@ class ImageProcessor:
             device_preference: str = "Auto",
             tracker: ProgressTracker = None
     ) -> Image.Image:
-        """
-        Main pipeline for extracting an object and optionally inpainting the background behind it.
+        """Main pipeline for extracting an object and optionally inpainting background.
+
+        Executes two-phase processing: (1) Background removal/segmentation using
+        selected engine, (2) Optional inpainting of the mask hole region.
+        
+        Args:
+            original_img: Full source image (RGBA format) containing object to extract.
+            working_bbox: Tuple of (x1, y1, x2, y2) defining region within original_img.
+                Can include margin around actual object for better edge detection.
+            engine: AI engine for segmentation: 'rembg (isnet)' for fast removal,
+                'SAM (vit_b)' for more precise box-guided segmentation.
+            inpaint_enabled: If True, applies inpainting to fill background holes
+                detected in the mask. If False, outputs extracted object as-is with alpha.
+            inpaint_method: When inpaint_enabled=True, selects fill algorithm:
+                'OpenCV' uses Telea algorithm (fast, good for small artifacts).
+                'LaMa' uses neural network (slower, better quality for large holes).
+            device_preference: Hardware to use: 'Auto' (auto-detect), 'CUDA' (force GPU),
+                'CPU' (force CPU). Affects both extraction and inpainting speed.
+            tracker: Optional ProgressTracker for progress reporting and cancellation.
+                If provided, will be updated with progress and monitored for cancel signal.
+        
+        Returns:
+            RGBA image with extracted object (transparency outside mask).
+            When inpaint_enabled=True, background holes are filled.
+        
+        Raises:
+            FileNotFoundError: If SAM checkpoint not found.
+            RuntimeError: If CUDA forced but not available.
+            ValueError: If engine or inpaint_method values invalid.
         """
 
         def set_prog(prog: float, msg: str):
